@@ -1,0 +1,148 @@
+---
+title: "Exploratory Data Analysis"
+author: "Raymond Wong"
+date: "16/05/2020"
+output: html_document
+---
+
+```{r setup , include = FALSE}
+knitr::opts_chunk$set(warning = FALSE)
+```
+
+```{r, results = "hide", message = FALSE}
+
+# Import tidyverse, read the data into a csv 
+
+library(tidyverse)
+
+raw_data <- read_csv("grocery_store_data_cleaned.csv")
+
+```
+
+```{r}
+
+# Check the structure of the data 
+str(raw_data)
+
+```
+
+```{r}
+
+# Get summary of data 
+
+summary(raw_data)
+
+```
+
+```{r}
+
+# Check the categories for each variable, find how many unique entries, helps us figure out what the variables mean, which are categorical, etc. 
+
+unique_entries <- apply(raw_data, 2, unique)
+
+num_unique <- sapply(unique_entries, length)
+
+(num_unique)
+
+```
+
+Each row of data corresponds to one item being sold with the following attributes of the purchase recorded. 
+
+**X1**: irrelevant
+
+**TICKET**: Character, the unique ID of each transaction (i.e. receipt number), several rows can have same ticket, as it just means several items were bought in one transaction 
+
+**UNITS**: Numeric, quantity of the item transacted with (could be in kg, lbs, bags, etc.)
+
+**REFERENCE**: Numeric, unique code assigned to each item
+
+**CODE**: Not sure, but never used 
+
+**NAME**: character, name of the item purchased
+
+**UNIT_PRICEBUY**: Numeric, cost to the grocery store of one unit of the item being purchased
+
+**UNIT_PRICESELL**: Numeric, how much one unit of the item being purchased was sold for 
+
+**DATE**: Character, date and time in yyyy-mm-dd hh:mm format indicating when the item was sold
+
+**PAYMENT**: Character, choics are cash, cashrefund, magcard or free, indiciating how the customer paid for the item
+
+**TRANSID**: Not sure, but never used 
+
+**CATEGORY**: Character, The larger group of which the item purchased belongs to
+
+**TOTAL_PRICEBUY**: Numeric, where $\text{TOTAL_PRICEBUY}= \text{UNITS} * \text{UNIT_PRICEBUY}$, is the cost of the purchase to the grocery store (e.g. costs from purchasing the good to inventory, etc.)
+
+**TOTAL_PRICESELL**: Numeric, where $\text{TOTAL_PRICESELL} = \text{UNITS} * \text{UNIT_PRICESELL}$, is the sale value of the purchase
+
+**UNIT_PRICE_MARGIN**: Numeric, where $\text{UNIT_PRICE_MARGIN}= \text{UNIT_PRICESELL} - \text{UNIT_PRICEBUY}$, profit per unit sold of that purchase
+
+**PROFIT**: Numeric, where $\text{PROFIT} = \text{TOTAL_PRICESELL} - \text{TOTAL_PRICEBUY}$, total profit of that purchase 
+
+### Analyzing the Margins by Category
+
+A KPI for grocery stores is their margin in %, or $$\frac{\text{unit profit}}{\text{unit costs}}$$ where $$\text{unit profit} = \text{unit revenue} - \text{unit costs}$$ 
+
+We want to see which categories are highest margin, as we would want to sell more high margin products and sell less low margin products so we can make more money. 
+
+```{r, results = "hide"}
+
+data <- raw_data %>% mutate(margin_percent = UNIT_PRICE_MARGIN/UNIT_PRICESELL)
+
+# Check for number of products with "100% margin", those are probably wrong 
+
+data <- data %>% mutate(pure_profit = ifelse(abs(margin_percent - 1) < .Machine$double.eps, 1, 0))
+
+# Group by category 
+
+by_category <- data %>% group_by(CATEGORY)
+
+by_category_summary <- by_category %>% summarise(
+  total_units = sum(UNITS, na.rm = TRUE),
+  total_profit = sum(PROFIT, na.rm = TRUE),
+  average_margin_percent = mean(margin_percent, na.rm = TRUE),
+  median_margin_percent = median(margin_percent),
+  sd_margin_percent = sd(margin_percent, na.rm = TRUE),
+  avg_unit_price_sell = mean(UNIT_PRICESELL, na.rm = TRUE),
+  sd_unit_price_sell = sd(UNIT_PRICESELL, na.rm = TRUE),
+  num_pure_profit = sum(pure_profit, na.rm = TRUE),
+  count = n()
+)  %>% mutate(percent_pure_profit = num_pure_profit/count) %>% 
+  mutate(profit_per_unit = total_profit/count) %>% 
+  mutate(normalized_sd_price_sell_unit = sd_unit_price_sell/avg_unit_price_sell) %>% 
+  mutate(sharpe = 1/normalized_sd_price_sell_unit)
+
+```
+
+We notice some categories have abnormally high average margins for their items while others are quite low. 
+
+```{r, message = FALSE}
+library(scales)
+
+ggplot(data = by_category_summary) + 
+  geom_bar(mapping = aes(x = CATEGORY, y = average_margin_percent), stat = "identity") + theme(axis.text.x = element_text(angle = 90, hjust = 1)) + 
+  ggtitle("Average Item Margin for each Category") + 
+  scale_y_continuous(name = "Margin %", labels = percent) + 
+  scale_x_discrete(name = "Category")
+
+```
+
+We can attribute these abnormally high margins to many of their UNIT_PRICEBUY attributes equalling 0, in other words their margin is 100%! 
+
+```{r, warning = FALSE, message = FALSE}
+
+ggplot(data = by_category_summary) + 
+  geom_bar(mapping = aes(x = CATEGORY, y = percent_pure_profit), stat = "identity") + theme(axis.text.x = element_text(angle = 90, hjust = 1)) + 
+  ggtitle("Percentage of Item Sales for each Category with 100% Margin") + scale_y_continuous(name = "% of Total Category Sales", labels = percent) + 
+  scale_x_discrete(name = "Category")
+
+ggplot(data = by_category_summary) + 
+  geom_bar(mapping = aes(x = CATEGORY, y = median_margin_percent), stat = "identity") + theme(axis.text.x = element_text(angle = 90, hjust = 1)) + 
+  ggtitle("Median Margin for each Category") + 
+  scale_y_continuous(name = "Median Margin %", label = percent) + 
+  scale_x_discrete(name = "Category")
+```
+
+This is likely an error, as that implies those items cost nothing to the grocery store to procure. Even if this is not an error, i.e. they were grown on the grocery store's own farm and not bought from another supplier, it costs the grocery store money to grow food on the farm, which is a cost that should be reflected in UNIT_PRICEBUY. Therefore, it is inaccurate to say some items have 100% margin, as no item can be procured/grown without incurring any cost. However, we've seen that this error is quite pervasive, which unfortunately means we cannot use margins as a KPI anymore. 
+
